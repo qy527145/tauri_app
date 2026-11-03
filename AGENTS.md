@@ -9,19 +9,19 @@ Tauri 2 桌面应用模板：Rust 负责系统能力与业务逻辑，React 前�
 
 ## 目录
 
-| 路径                          | 职责                                                                   |
-| ----------------------------- | ---------------------------------------------------------------------- |
-| `src/`                        | React 19 + Vite 8 + Tailwind v4 前端                                   |
-| `src/lib/ipc.ts`              | **唯一**调用 `invoke` 的地方：类型化命令 + `CommandError`              |
-| `src/lib/log.ts`              | 前端日志，写进与 Rust 同一份日志文件                                   |
-| `src/components/ui/`          | shadcn/ui 风格组件                                                     |
-| `src-tauri/src/lib.rs`        | `tauri::Builder`：插件、状态、命令注册                                 |
-| `src-tauri/src/commands/`     | 按领域分模块的 `#[tauri::command]`，在 `commands/mod.rs` 汇总          |
-| `src-tauri/src/config.rs`     | **唯一**读取环境变量的地方                                             |
-| `src-tauri/src/error.rs`      | `AppError` → 前端收到的 `{ code, message }`                            |
-| `src-tauri/capabilities/`     | 前端可调用的权限清单，最小授权                                         |
-| `src-tauri/tauri.conf.json`   | 窗口、CSP、打包配置                                                    |
-| `.env`                        | 仅 debug 构建加载的本地默认值                                          |
+| 路径                        | 职责                                                          |
+| --------------------------- | ------------------------------------------------------------- |
+| `src/`                      | React 19 + Vite 8 + Tailwind v4 前端                          |
+| `src/lib/ipc.ts`            | **唯一**调用 `invoke` 的地方：类型化命令 + `CommandError`     |
+| `src/lib/log.ts`            | 前端日志，写进与 Rust 同一份日志文件                          |
+| `src/components/ui/`        | shadcn/ui 风格组件                                            |
+| `src-tauri/src/lib.rs`      | `tauri::Builder`：插件、状态、命令注册                        |
+| `src-tauri/src/commands/`   | 按领域分模块的 `#[tauri::command]`，在 `commands/mod.rs` 汇总 |
+| `src-tauri/src/config.rs`   | **唯一**读取环境变量的地方                                    |
+| `src-tauri/src/error.rs`    | `AppError` → 前端收到的 `{ code, message }`                   |
+| `src-tauri/capabilities/`   | 前端可调用的权限清单，最小授权                                |
+| `src-tauri/tauri.conf.json` | 窗口、CSP、打包配置                                           |
+| `.env`                      | 仅 debug 构建加载的本地默认值                                 |
 
 ## 命令
 
@@ -30,7 +30,7 @@ bun run init         # 一键安装依赖 + 准备 .env（幂等）
 bun run dev          # 启动桌面应用：Vite HMR + Rust 改动自动重编重启
 bun run build        # 打包当前平台安装程序 → src-tauri/target/release/bundle/
 bun run build:debug  # 带 devtools 与 sourcemap 的调试包
-bun run check        # tsc --noEmit + cargo fmt --check + clippy -D warnings
+bun run check        # biome check + tsc --noEmit + cargo fmt --check + clippy -D warnings
 bun run test         # bun test + cargo test
 bun run lint         # biome check
 bun run fmt          # biome --write + cargo fmt
