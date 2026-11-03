@@ -1,26 +1,44 @@
 {
-  "name": "tauri_app",
-  "private": true,
+  "name": "{{ project-name | kebab_case }}",
   "version": "0.1.0",
+  "private": true,
   "type": "module",
+  "packageManager": "bun@1.4.2",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview",
-    "tauri": "tauri"
+    "init": "bun run scripts/init.ts",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "build:debug": "tauri build --debug",
+    "web:dev": "vite",
+    "web:build": "vite build",
+    "tauri": "tauri",
+    "icon": "tauri icon",
+    "check": "tsc --noEmit && cargo fmt --manifest-path src-tauri/Cargo.toml --all --check && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
+    "test": "bun test && cargo test --manifest-path src-tauri/Cargo.toml",
+    "lint": "biome check .",
+    "fmt": "biome check --write . && cargo fmt --manifest-path src-tauri/Cargo.toml --all"
   },
   "dependencies": {
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-opener": "^2"
+    "@tauri-apps/api": "2.12.4",
+    "@tauri-apps/plugin-log": "2.10.1",
+    "@tauri-apps/plugin-opener": "2.7.2",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "lucide-react": "1.67.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "tailwind-merge": "3.7.0"
   },
   "devDependencies": {
-    "@types/react": "^19.1.8",
-    "@types/react-dom": "^19.1.6",
-    "@vitejs/plugin-react": "^6.0.2",
-    "typescript": "~6.0.3",
-    "vite": "^8.0.16",
-    "@tauri-apps/cli": "^2"
+    "@biomejs/biome": "2.6.4",
+    "@tailwindcss/vite": "4.3.4",
+    "@tauri-apps/cli": "2.12.4",
+    "@types/bun": "1.4.4",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.2.1",
+    "tailwindcss": "4.3.4",
+    "typescript": "7.0.2",
+    "vite": "8.3.5"
   }
 }

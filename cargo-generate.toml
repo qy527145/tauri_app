@@ -1,0 +1,12 @@
+[template]
+cargo_generate_version = ">=0.23"
+# 生成时不带走的目录：由安装/构建过程重新产生。
+ignore = ["node_modules", "dist", "src-tauri/target", "src-tauri/gen", "bun.lock"]
+# 原样复制、不做 Liquid 渲染：GitHub Actions 的 `${{ }}` 与二进制图标。
+exclude = [".github/**", "src-tauri/icons/**"]
+
+[placeholders.bundle_id]
+type = "string"
+prompt = "Bundle identifier（反向域名，安装后不可更改）"
+default = "com.example.app"
+regex = "^[a-zA-Z][a-zA-Z0-9-]*(\\.[a-zA-Z][a-zA-Z0-9-]*)+$"
