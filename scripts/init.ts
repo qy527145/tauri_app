@@ -52,6 +52,6 @@ console.log(`
 完成。下一步：
 
   bun run dev       # 启动桌面应用（Vite HMR + Rust 自动重编）
-  bun run check     # 类型检查 + clippy
+  bun run check     # lint + 类型检查 + clippy
   bun run build     # 打包安装程序 → src-tauri/target/release/bundle/
 `);
