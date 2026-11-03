@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { type AppInfo, CommandError, commands, isTauri } from "@/lib/ipc";
 import { logger } from "@/lib/log";
 
+const PROJECT_NAME = "{{project-name}}";
+
 type Info =
   | { kind: "loading" }
   | { kind: "ok"; data: AppInfo }
@@ -52,7 +54,7 @@ export default function App() {
     <main className="mx-auto flex h-full max-w-2xl flex-col justify-center gap-8 px-8">
       <header className="space-y-2">
         <p className="text-sm text-muted-foreground">Tauri · Rust · Vite · React</p>
-        <h1 className="text-4xl font-semibold tracking-tight">{"{{project-name}}"}</h1>
+        <h1 className="text-4xl font-semibold tracking-tight">{PROJECT_NAME}</h1>
         <p className="text-muted-foreground">
           编辑 <code className="rounded bg-muted px-1.5 py-0.5 text-sm">src-tauri/src</code> 或{" "}
           <code className="rounded bg-muted px-1.5 py-0.5 text-sm">src</code> 开始开发。
