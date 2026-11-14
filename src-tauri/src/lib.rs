@@ -3,6 +3,7 @@ mod config;
 mod error;
 mod logging;
 mod state;
+mod update;
 
 #[cfg(desktop)]
 use tauri::Manager;
@@ -38,11 +39,14 @@ pub fn run() {
     builder
         .plugin(logging::plugin(&config.log_filter))
         .plugin(tauri_plugin_opener::init())
+        .manage(config)
         .manage(AppState::new())
         .invoke_handler(commands::handler())
         .setup(|app| {
             let package = app.package_info();
             log::info!("{} v{} started", package.name, package.version);
+            // 启动后静默查一次新版本；查到了发 `update://available` 事件给前端。
+            commands::update::spawn_auto_check(app.handle());
             Ok(())
         })
         .run(tauri::generate_context!())

@@ -29,3 +29,17 @@ describe("commands", () => {
     expect(error).toMatchObject({ code: "unknown", message: "window closed" });
   });
 });
+
+describe("update commands", () => {
+  test("checkUpdate 透传后端结果", async () => {
+    invoke.mockResolvedValueOnce({ current: "0.1.0", release: null });
+    await expect(commands.checkUpdate()).resolves.toEqual({ current: "0.1.0", release: null });
+    expect(invoke).toHaveBeenLastCalledWith("check_update", undefined);
+  });
+
+  test("update 错误码保留", async () => {
+    invoke.mockRejectedValueOnce({ code: "update", message: "已经是最新版本" });
+    const error = await commands.applyUpdate().catch((e: unknown) => e);
+    expect(error).toMatchObject({ command: "apply_update", code: "update" });
+  });
+});

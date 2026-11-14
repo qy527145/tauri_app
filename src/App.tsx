@@ -3,6 +3,7 @@ import { ArrowUpRight, Cpu, Loader2 } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { UpdateNotice } from "@/components/update-notice";
 import { type AppInfo, CommandError, commands, isTauri } from "@/lib/ipc";
 import { logger } from "@/lib/log";
 
@@ -101,10 +102,11 @@ export default function App() {
         </p>
       )}
 
-      <footer>
+      <footer className="flex items-center justify-between gap-4">
         <Button variant="ghost" size="sm" onClick={() => void openUrl("https://v2.tauri.app")}>
           Tauri 文档 <ArrowUpRight />
         </Button>
+        {info.kind === "ok" && <UpdateNotice />}
       </footer>
     </main>
   );

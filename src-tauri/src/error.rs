@@ -9,6 +9,10 @@ pub enum AppError {
     #[error("{0}")]
     InvalidInput(String),
 
+    /// 自更新过程中的失败（查不到、下载失败、装不上）。文案已经是给人看的。
+    #[error("{0}")]
+    Update(String),
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
@@ -21,6 +25,7 @@ impl AppError {
     pub fn code(&self) -> &'static str {
         match self {
             Self::InvalidInput(_) => "invalid_input",
+            Self::Update(_) => "update",
             Self::Io(_) | Self::Tauri(_) => "internal",
         }
     }

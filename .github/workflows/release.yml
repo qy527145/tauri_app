@@ -1,4 +1,18 @@
-name: release
+name: Release
+
+# 发版流水线：push / PR 跑检查；推 `v*` tag 时三台构建机各出一份安装包，建 GitHub Release。
+#
+#   Windows (x86_64)       → NSIS `*-setup.exe`
+#   macOS (Apple Silicon)  → `*_aarch64.dmg`
+#   Linux (x86_64)         → `*_amd64.deb`
+#
+# 每个平台只放**一份**安装包：应用内「检查更新」按后缀与架构挑文件（见
+# src-tauri/src/update/asset.rs），同一平台放两份它就没法选。要加 Intel Mac
+# 等目标时在 matrix 里加一行，asset.rs 的架构判断已经能区分。
+#
+# 触发：
+#   - `bun run upgrade patch --push`（或手动 git push --tags）
+#   - 手动：Actions → Release → Run workflow，tag 填 v0.1.2；填 dry-run 只构建不发版
 
 on:
   push:
@@ -6,19 +20,34 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的 tag（如 v0.1.2）；填 dry-run 只构建不发版"
+        required: true
+        default: dry-run
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+concurrency:
+  # 同一个 tag 的多次发布串行化：两个 run 同时建 Release 会互相踩。
+  group: release-${{ github.event.inputs.tag || github.ref }}
+  cancel-in-progress: false
 
 jobs:
   check:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - name: Install Linux dependencies
+      - name: 安装 Linux 系统依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - uses: oven-sh/setup-bun@v2
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -32,45 +61,148 @@ jobs:
       - run: bun run check
       - run: bun run test
 
-  # 打 tag 后三平台各自出安装包，tauri-action 负责构建并挂到同一个草稿 Release 上。
-  build:
-    if: startsWith(github.ref, 'refs/tags/v')
+  # 决定这次要不要发版、发哪个 tag，并校验 tag 与代码里的版本号一致。
+  plan:
     needs: check
-    permissions:
-      contents: write
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-22.04
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+      publish: ${{ steps.v.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        shell: bash
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          pkg=$(node -p "require('./package.json').version")
+          cargo=$(grep -m1 -E '^version\s*=' src-tauri/Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
+
+          if [ "$INPUT_TAG" = "dry-run" ]; then
+            tag="v$pkg"; publish=false
+          elif [ -n "$INPUT_TAG" ]; then
+            tag="$INPUT_TAG"; publish=true
+          else
+            tag="$GITHUB_REF_NAME"; publish=true
+          fi
+          version="${tag#v}"
+          echo "tag=$tag version=$version package.json=$pkg Cargo.toml=$cargo publish=$publish"
+
+          # 发版时 tag 必须与两处版本号一致，否则文件名与包内版本对不上。
+          if [ "$publish" = "true" ] && { [ "$version" != "$pkg" ] || [ "$version" != "$cargo" ]; }; then
+            echo "::error::tag $tag 与 package.json ($pkg) / src-tauri/Cargo.toml ($cargo) 不一致，用 bun run upgrade 改版本号"
+            exit 1
+          fi
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: plan
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest
-            args: --target aarch64-apple-darwin
-          - platform: macos-latest
-            args: --target x86_64-apple-darwin
-          - platform: ubuntu-22.04
-            args: ""
-          - platform: windows-latest
-            args: ""
-    runs-on: ${{ matrix.platform }}
+          - os: windows-latest
+            bundles: nsis
+            ext: exe
+          - os: macos-latest # Apple Silicon
+            bundles: dmg
+            ext: dmg
+          - os: ubuntu-22.04
+            bundles: deb
+            ext: deb
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+      - name: 安装 Linux 系统依赖
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - uses: oven-sh/setup-bun@v2
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
       - run: bun install --frozen-lockfile
-      - uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: 打安装包
+        # 前端由 tauri.conf.json 的 beforeBuildCommand 自己构建。
+        run: bun x tauri build --bundles ${{ matrix.bundles }}
+      - name: 收集安装包
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/installers"
+          mkdir -p "$stage"
+          find src-tauri/target/release/bundle -type f -name '*.${{ matrix.ext }}' -exec cp {} "$stage"/ \;
+          ls -l "$stage"
+          # 一个都没有说明打包静默失败了，别让后面建出一个空 Release。
+          test -n "$(ls -A "$stage")"
+      - uses: actions/upload-artifact@v4
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: ${{ github.ref_name }}
-          releaseDraft: true
-          args: ${{ matrix.args }}
+          name: installers-${{ matrix.os }}
+          path: ${{ runner.temp }}/installers/*
+          if-no-files-found: error
+
+  release:
+    needs: [plan, build]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          path: dist-installers
+          merge-multiple: true
+      - name: 三种安装包缺一不可
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -l dist-installers
+          for ext in exe dmg deb; do
+            ls dist-installers/*."$ext" >/dev/null 2>&1 || { echo "::error::缺少 .$ext 安装包"; exit 1; }
+          done
+      - name: 建 Release 并上传安装包
+        env:
+          # 仓库若把默认 GITHUB_TOKEN 限制成只读，建 Release 会 403；
+          # 配一个带 repo 权限的 secrets.RELEASE_TOKEN 即可绕开，没配就用 GITHUB_TOKEN。
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          name=$(node -p "require('./src-tauri/tauri.conf.json').productName")
+          exe=$(cd dist-installers && ls *.exe)
+          dmg=$(cd dist-installers && ls *.dmg)
+          deb=$(cd dist-installers && ls *.deb)
+
+          notes="$RUNNER_TEMP/notes.md"
+          cat > "$notes" <<EOF
+          $name $VERSION
+
+          | 平台 | 文件 |
+          | ---- | ---- |
+          | Windows (x86_64) | \`$exe\` |
+          | macOS (Apple Silicon) | \`$dmg\` |
+          | Linux (x86_64, deb) | \`$deb\` |
+
+          国内下载慢可在地址前加 \`https://gh-proxy.com/\`。应用内「检查更新」会自动选择可用的线路。
+          EOF
+
+          # 幂等：重跑同一个 tag 时覆盖附件而不是失败。
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "$name $VERSION" --notes-file "$notes"
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$name $VERSION" --notes-file "$notes"
+          fi
+          gh release upload "$TAG" dist-installers/* --repo "$GITHUB_REPOSITORY" --clobber
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name'
