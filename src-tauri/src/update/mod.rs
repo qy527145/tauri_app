@@ -61,14 +61,29 @@ pub struct ReleaseInfo {
 
 /// 查最新 Release。有新版且有适合这台机器的安装包时返回 `Some`。
 ///
-/// 走 `/releases/latest`：GitHub 自己只返回正式版，草稿与预发布不会出现。
+/// 先走 API（有附件大小、能判草稿/预发布）；API 不通再走页面路线
+/// （[`check_via_html`]）。两条都失败才报错，错误里两条原因都带着。
 pub async fn check(current: &str, prefs: &NetPrefs) -> Result<Option<ReleaseInfo>, String> {
     let repo =
         repo().ok_or("没有配置 GitHub 仓库（Cargo.toml 的 repository），先跑 bun run init")?;
+    match check_via_api(current, prefs, repo).await {
+        Ok(found) => Ok(found),
+        Err(api_err) => {
+            log::debug!("api route failed, trying html route: {api_err}");
+            check_via_html(current, prefs, repo)
+                .await
+                .map_err(|html_err| format!("查更新失败：{api_err}；页面路线也失败：{html_err}"))
+        }
+    }
+}
+
+async fn check_via_api(
+    current: &str,
+    prefs: &NetPrefs,
+    repo: &str,
+) -> Result<Option<ReleaseInfo>, String> {
     let url = format!("https://api.github.com/repos/{repo}/releases/latest");
-    let fetched = net::get_first(prefs, &url, QUERY_TIMEOUT, None, None)
-        .await
-        .map_err(|e| format!("查更新失败：{e}"))?;
+    let fetched = net::get_first(prefs, &url, QUERY_TIMEOUT, None, None).await?;
     log::debug!(
         "release info fetched from {}",
         net::source_label(&fetched.source)
@@ -99,6 +114,68 @@ pub async fn check(current: &str, prefs: &NetPrefs) -> Result<Option<ReleaseInfo
         asset_url: asset.browser_download_url,
         asset_size: asset.size,
     }))
+}
+
+/// 不经 `api.github.com` 的查法。实测加速站都不代理 API（回 403），但都代理
+/// `releases/latest` 的 302 与 `releases/expanded_assets/<tag>`（Release 页面异步加载
+/// 附件列表用的 HTML 片段）。拿不到附件大小（置 0，下载时跳过大小校验）；
+/// `/releases/latest` 本身只指向正式版，草稿与预发布不会出现，与 API 语义一致。
+async fn check_via_html(
+    current: &str,
+    prefs: &NetPrefs,
+    repo: &str,
+) -> Result<Option<ReleaseInfo>, String> {
+    let latest = format!("https://github.com/{repo}/releases/latest");
+    let location = net::resolve_redirect(prefs, &latest, QUERY_TIMEOUT).await?;
+    let tag = location
+        .rsplit("/releases/tag/")
+        .next()
+        .filter(|t| !t.is_empty() && !t.contains('/'))
+        .ok_or_else(|| format!("releases/latest 的跳转地址看不懂：{location}"))?;
+    if !version::is_newer(current, tag) {
+        return Ok(None);
+    }
+    let page = format!("https://github.com/{repo}/releases/expanded_assets/{tag}");
+    let fetched = net::get_first(prefs, &page, QUERY_TIMEOUT, None, None).await?;
+    let html = String::from_utf8_lossy(&fetched.bytes);
+    let name = assets_in_html(&html, tag)
+        .into_iter()
+        .find(|n| asset::matches_here(n))
+        .ok_or_else(|| {
+            format!(
+                "{tag} 没有适合这台机器（{} {}）的安装包，请到 Release 页面手动下载",
+                std::env::consts::OS,
+                asset::arch_label()
+            )
+        })?;
+    Ok(Some(ReleaseInfo {
+        version: version::strip_v(tag).to_owned(),
+        tag: tag.to_owned(),
+        html_url: format!("https://github.com/{repo}/releases/tag/{tag}"),
+        asset_url: format!("https://github.com/{repo}/releases/download/{tag}/{name}"),
+        asset_name: name,
+        asset_size: 0,
+    }))
+}
+
+/// 从 `releases/expanded_assets/<tag>` 的 HTML 里抠出附件名：
+/// 所有 `/releases/download/<tag>/<name>` 的 `<name>`，去重、保持出现顺序。
+fn assets_in_html(html: &str, tag: &str) -> Vec<String> {
+    let needle = format!("/releases/download/{tag}/");
+    let mut out: Vec<String> = Vec::new();
+    let mut rest = html;
+    while let Some(i) = rest.find(&needle) {
+        let after = &rest[i + needle.len()..];
+        let end = after
+            .find(|c: char| matches!(c, '"' | '\'' | '?' | '#') || c.is_whitespace())
+            .unwrap_or(after.len());
+        let name = &after[..end];
+        if !name.is_empty() && !out.iter().any(|n| n == name) {
+            out.push(name.to_owned());
+        }
+        rest = &after[end..];
+    }
+    out
 }
 
 /// GitHub API 里用到的字段，其余忽略。
@@ -161,6 +238,26 @@ pub async fn download(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pulls_asset_names_out_of_the_expanded_assets_fragment() {
+        let html = r#"
+          <a href="/o/r/releases/download/v1.2.0/app_0.1.0_x64-setup.exe" rel="nofollow">
+          <a href="/o/r/releases/download/v1.2.0/app_0.1.0_x64-setup.exe.sha256">
+          <a href='/o/r/releases/download/v1.2.0/app_0.1.0_aarch64.dmg'>
+          <a href="/o/r/releases/download/v1.2.0/app_0.1.0_x64-setup.exe">
+          <a href="/o/r/releases/download/v1.1.0/old-installer.exe">
+        "#;
+        assert_eq!(
+            assets_in_html(html, "v1.2.0"),
+            vec![
+                "app_0.1.0_x64-setup.exe",
+                "app_0.1.0_x64-setup.exe.sha256",
+                "app_0.1.0_aarch64.dmg",
+            ]
+        );
+        assert!(assets_in_html(html, "v9.9.9").is_empty());
+    }
 
     #[test]
     fn release_info_serializes_camel_case() {

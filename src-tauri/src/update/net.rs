@@ -114,7 +114,7 @@ pub async fn get_first(
         urls.insert(0, hit);
     }
 
-    let client = client(prefs, timeout)?;
+    let client = client(prefs, timeout, true)?;
     let deadline = Instant::now() + ROUND_TIMEOUT.max(timeout);
     let mut failed: Vec<(String, String)> = Vec::new();
 
@@ -149,9 +149,16 @@ fn cancelled(cancel: Option<&AtomicBool>) -> bool {
     cancel.is_some_and(|c| c.load(Ordering::SeqCst))
 }
 
-fn client(prefs: &NetPrefs, timeout: Duration) -> Result<reqwest::Client, String> {
+/// `follow`：要不要跟随重定向。查「最新 tag」靠的是读 302 的 `Location`，不能跟。
+fn client(prefs: &NetPrefs, timeout: Duration, follow: bool) -> Result<reqwest::Client, String> {
+    let redirect = if follow {
+        reqwest::redirect::Policy::limited(10)
+    } else {
+        reqwest::redirect::Policy::none()
+    };
     let mut builder = reqwest::Client::builder()
         .timeout(timeout)
+        .redirect(redirect)
         .user_agent(concat!(
             env!("CARGO_PKG_NAME"),
             "/",
@@ -166,6 +173,59 @@ fn client(prefs: &NetPrefs, timeout: Duration) -> Result<reqwest::Client, String
     builder
         .build()
         .map_err(|e| format!("建 HTTP 客户端失败：{e}"))
+}
+
+/// 发一个**不跟随重定向**的请求，返回 `Location`（已去掉加速站前缀，是原始 GitHub 地址）。
+///
+/// `github.com/<repo>/releases/latest` 会 302 到 `/releases/tag/<tag>`。这是不经
+/// `api.github.com` 拿到最新 tag 的办法 —— 实测加速站都不代理 API（回 403），
+/// 但都代理这条重定向。同样并发抢，谁先回 3xx 就用谁。
+pub async fn resolve_redirect(
+    prefs: &NetPrefs,
+    url: &str,
+    timeout: Duration,
+) -> Result<String, String> {
+    let urls = prefs.candidates(url);
+    let client = client(prefs, timeout, false)?;
+    let mut set = FuturesUnordered::new();
+    for url in urls {
+        let client = client.clone();
+        set.push(async move {
+            let res = client
+                .get(&url)
+                .send()
+                .await
+                .map_err(|e| (source_label(&url), network_error(&e)))?;
+            let status = res.status();
+            let location = res
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned);
+            match (status.is_redirection(), location) {
+                (true, Some(loc)) => Ok(strip_accel(&loc).to_owned()),
+                _ => Err((source_label(&url), format!("HTTP {}", status.as_u16()))),
+            }
+        });
+    }
+    let mut failed = Vec::new();
+    while let Some(done) = set.next().await {
+        match done {
+            Ok(location) => return Ok(location),
+            Err(reason) => failed.push(reason),
+        }
+    }
+    Err(format_failures(&failed))
+}
+
+/// 把加速站套在外面的地址还原成原始 GitHub 地址：
+/// `https://ghproxy.net/https://github.com/a/b` → `https://github.com/a/b`。
+pub fn strip_accel(url: &str) -> &str {
+    GITHUB_UPSTREAMS
+        .iter()
+        .filter_map(|p| url.find(p))
+        .min()
+        .map_or(url, |i| &url[i..])
 }
 
 /// 同时向所有候选要响应头，返回**第一个**回 2xx 的，以及其它源的失败原因。
@@ -271,6 +331,22 @@ fn remember_good(label: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strip_accel_unwraps_mirror_urls() {
+        assert_eq!(
+            strip_accel("https://ghproxy.net/https://github.com/a/b/releases/tag/v1"),
+            "https://github.com/a/b/releases/tag/v1"
+        );
+        assert_eq!(
+            strip_accel("https://github.com/a/b"),
+            "https://github.com/a/b"
+        );
+        assert_eq!(
+            strip_accel("https://example.com/x"),
+            "https://example.com/x"
+        );
+    }
 
     #[test]
     fn github_urls_expand_to_official_then_accels() {
